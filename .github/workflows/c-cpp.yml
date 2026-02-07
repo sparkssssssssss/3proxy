@@ -1,4 +1,4 @@
-name: Cross Compile 3proxy (Final Fix)
+name: Cross Compile 3proxy (No-Fail Static)
 
 on:
   workflow_dispatch:
@@ -24,26 +24,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-mipsel-linux-gnu make
           
-      - name: Modify Makefiles (Disable Plugins)
+      - name: Disable Plugins (Brute Force)
         run: |
-          # 关键修正：直接在根目录操作，不要 cd src
+          # 1. 直接在当前目录及子目录查找 Makefile.Linux，去掉 plugins 依赖
+          # 这样无论文件在哪都能修改，且不会因为 grep 找不到而报错
+          find . -name "Makefile.Linux" -exec sed -i 's/plugins//g' {} +
           
-          # 1. 在 Makefile.inc 中清空 PLUGINS 变量
-          # 这会阻止源码层面的插件定义
-          sed -i 's/^PLUGINS =.*/PLUGINS =/g' Makefile.inc
-
-          # 2. 在 Makefile.Linux 中移除 plugins 目标
-          # 这会阻止 make 进入 plugins 目录
-          sed -i 's/plugins//g' Makefile.Linux
+          # 2. 查找所有的 Makefile.inc，将 PLUGINS 变量置空
+          find . -name "Makefile.inc" -exec sed -i 's/^PLUGINS =.*/PLUGINS =/g' {} +
           
-          # 打印修改后的行以确认（调试用）
-          grep "PLUGINS =" Makefile.inc
-          grep "plugins" Makefile.Linux || echo "Plugins removed from Makefile.Linux"
+          echo "Makefile patching completed."
 
       - name: Compile 3proxy
         run: |
-          # 在根目录直接运行 make
-          # make 会读取 Makefile.Linux，然后自动进入 src 目录编译
+          # 依然在根目录执行，利用 Makefile.Linux 的递归逻辑
+          # 由于上面已经修改了文件，它不会再尝试进入 plugins 目录
           
           make -f Makefile.Linux \
           CC=mipsel-linux-gnu-gcc \
@@ -51,23 +46,22 @@ jobs:
           CFLAGS="-g0 -O2 -mips32r2 -mtune=mips32r2 -fomit-frame-pointer -fno-strict-aliasing -c -pthread -D_THREAD_SAFE -D_REENTRANT -DNOODBC -DWITH_STD_MALLOC -D_GNU_SOURCE -DLINUX -DWITH_POLL -DFD_SETSIZE=4096" \
           LDFLAGS="-static -s"
 
-      - name: Check Output
+      - name: Locate and Check Output
         run: |
-          # 编译完成后，二进制文件通常位于 src 目录或 bin 目录
-          # 我们查找一下并显示信息
-          find . -name "3proxy" -type f -exec ls -lh {} \;
-          find . -name "3proxy" -type f -exec file {} \;
-
-      - name: Rename and Move Output
-        run: |
-          # 找到编译出的文件并重命名
-          # 根据之前的日志，它应该在 src/3proxy
-          if [ -f src/3proxy ]; then
-            mv src/3proxy 3proxy_mt7621_static
-          else
-            # 备用查找（万一在新版中路径变了）
-            find . -name "3proxy" -type f -exec mv {} 3proxy_mt7621_static \;
+          # 编译完成后，查找生成的 3proxy 文件
+          OUTPUT_PATH=$(find . -type f -name "3proxy" | head -n 1)
+          
+          if [ -z "$OUTPUT_PATH" ]; then
+            echo "Error: Binary not found!"
+            exit 1
           fi
+          
+          echo "Binary found at: $OUTPUT_PATH"
+          ls -lh "$OUTPUT_PATH"
+          file "$OUTPUT_PATH"
+          
+          # 移动并重命名
+          mv "$OUTPUT_PATH" 3proxy_mt7621_static
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
