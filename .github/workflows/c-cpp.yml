@@ -1,4 +1,4 @@
-name: Cross Compile 3proxy (High Performance)
+name: Cross Compile 3proxy (High Performance Fixed)
 
 on:
   workflow_dispatch:
@@ -24,26 +24,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-mipsel-linux-gnu make
           
-      - name: Compile 3proxy (Optimized for MT7621)
+      - name: Compile 3proxy (Optimized & Fixed)
         run: |
-          # 性能优化参数解释：
-          # -O2: 工业级标准优化，比 -O3 更稳定，适合网络服务
-          # -mips32r2: MT7621 支持 MIPS32 Release 2 指令集，开启后效率更高
-          # -mtune=mips32r2: 专门针对此架构微调
-          # -fomit-frame-pointer: 释放寄存器用于通用用途，略微提升性能
-          # -static: 静态链接，确保兼容性（虽然增加体积，但避免动态库加载开销）
+          # 修复说明：
+          # 1. 添加 -DLINUX : 告诉源码这是 Linux 环境，从而引入必要的头文件
+          # 2. 添加 -DWITH_POLL : 启用 poll() 模式，解决 nfds_t 未定义报错
+          # 3. 添加 -DFD_SETSIZE=4096 : 允许更高的并发连接数
           
           make -f Makefile.Linux \
           CC=mipsel-linux-gnu-gcc \
           LN="mipsel-linux-gnu-gcc -static" \
-          CFLAGS="-g0 -O2 -mips32r2 -mtune=mips32r2 -fomit-frame-pointer -fno-strict-aliasing -c -pthread -D_THREAD_SAFE -D_REENTRANT -DNOODBC -DWITH_STD_MALLOC -D_GNU_SOURCE" \
+          CFLAGS="-g0 -O2 -mips32r2 -mtune=mips32r2 -fomit-frame-pointer -fno-strict-aliasing -c -pthread -D_THREAD_SAFE -D_REENTRANT -DNOODBC -DWITH_STD_MALLOC -D_GNU_SOURCE -DLINUX -DWITH_POLL -DFD_SETSIZE=4096" \
           LDFLAGS="-static -s"
 
       - name: Check Binary Info
         run: |
-          # 验证文件架构
           file src/3proxy
-          # 打印文件大小（虽然没压缩，但 C 语言写的一般也就 1MB 左右）
           du -h src/3proxy
 
       - name: Rename Output
