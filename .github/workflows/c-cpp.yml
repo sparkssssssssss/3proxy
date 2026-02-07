@@ -1,4 +1,4 @@
-name: Cross Compile 3proxy (High Performance Fixed)
+name: Cross Compile 3proxy (Static Fix)
 
 on:
   workflow_dispatch:
@@ -24,30 +24,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-mipsel-linux-gnu make
           
-      - name: Compile 3proxy (Optimized & Fixed)
+      - name: Compile 3proxy (Main Binary Only)
         run: |
-          # 修复说明：
-          # 1. 添加 -DLINUX : 告诉源码这是 Linux 环境，从而引入必要的头文件
-          # 2. 添加 -DWITH_POLL : 启用 poll() 模式，解决 nfds_t 未定义报错
-          # 3. 添加 -DFD_SETSIZE=4096 : 允许更高的并发连接数
+          # 修复核心策略：
+          # 1. cd src : 直接进入源码目录
+          # 2. make ... 3proxy : 指定目标仅为 "3proxy" 可执行文件，跳过 plugins 目录
+          # 3. PLUGINS="" : 显式置空插件变量，防止 Makefile 自动递归
+          # 4. 保留之前的性能优化参数和宏定义
           
-          make -f Makefile.Linux \
+          cd src
+          make -f Makefile.Linux 3proxy \
           CC=mipsel-linux-gnu-gcc \
           LN="mipsel-linux-gnu-gcc -static" \
+          PLUGINS="" \
           CFLAGS="-g0 -O2 -mips32r2 -mtune=mips32r2 -fomit-frame-pointer -fno-strict-aliasing -c -pthread -D_THREAD_SAFE -D_REENTRANT -DNOODBC -DWITH_STD_MALLOC -D_GNU_SOURCE -DLINUX -DWITH_POLL -DFD_SETSIZE=4096" \
           LDFLAGS="-static -s"
 
       - name: Check Binary Info
         run: |
+          # 验证生成的文件
+          ls -lh src/3proxy
           file src/3proxy
-          du -h src/3proxy
 
       - name: Rename Output
         run: |
-          mv src/3proxy 3proxy_mt7621_perf
+          mv src/3proxy 3proxy_mt7621_static
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 3proxy-mt7621-perf
-          path: 3proxy_mt7621_perf
+          name: 3proxy-mt7621-static
+          path: 3proxy_mt7621_static
