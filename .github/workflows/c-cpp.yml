@@ -1,50 +1,57 @@
-name: C/C++ CI
+name: Cross Compile 3proxy (High Performance)
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ "master" ]
-    paths: [ '**.c', '**.h', 'Makefile.**', '.github/configs', '.github/workflows/c-cpp.yml' ]
-  pull_request:
-    branches: [ "master" ]
-    paths: [ '**.c', '**.h', 'Makefile.**', '.github/configs', '.github/workflows/c-cpp.yml' ]
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build-3proxy.yml'
 
 jobs:
-  ci:
-    name: "${{ matrix.target }}"
-    strategy:
-      matrix:
-        target:
-          - ubuntu-latest
-          - ubuntu-24.04-arm
-          - macos-15
-          - windows-2022
-    runs-on: ${{ matrix.target }}
+  build:
+    runs-on: ubuntu-latest
+    
     steps:
-    - uses: actions/checkout@v4
-#    - name: configure
-#      run: ./configure
-    - name: ln Linux
-      if: ${{ startsWith(matrix.target, 'ubuntu') }}
-      run: ln -s Makefile.Linux Makefile
-    - name: ln Mac
-      if: ${{ startsWith(matrix.target, 'macos') }}
-      run: ln -s Makefile.FreeBSD Makefile
-    - name: ln Windows
-      if: ${{ startsWith(matrix.target, 'windows') }}
-      run: copy Makefile.win Makefile
-    - name: dirs Windows
-      if: ${{ startsWith(matrix.target, 'windows') }}
-      run: cmd /C 'echo LIBS := -L "c:/program files/openssl/lib/VC/x64/MT" $(LIBS) >>Makefile.win && echo CFLAGS := -I "c:/program files/openssl/include" $(CFLAGS) >>Makefile.win && type Makefile.win && dir "c:/program files/openssl/lib"'
-    - name: SSLPlugin Linux
-      if: ${{ startsWith(matrix.target, 'ubuntu') }}
-      run: "sed -i '/^PLUGIN/s/$/ SSLPlugin/' Makefile && sed -i '/^LIBS/s/$/ -lcrypto -lssl/' Makefile"
-    - name: make
-      run: make
-    - name: mkdir
-      if: ${{ startsWith(matrix.target, 'ubuntu') }}
-      run: mkdir ~/3proxy
-    - name: make install
-      if: ${{ startsWith(matrix.target, 'ubuntu') }}
-      run: make DESTDIR=~/3proxy install
-    - name: make clean
-      run: make clean
+      - name: Checkout 3proxy source
+        uses: actions/checkout@v4
+        with:
+          repository: z3APA3A/3proxy
+          ref: master
+          
+      - name: Install Cross-Compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mipsel-linux-gnu make
+          
+      - name: Compile 3proxy (Optimized for MT7621)
+        run: |
+          # 性能优化参数解释：
+          # -O2: 工业级标准优化，比 -O3 更稳定，适合网络服务
+          # -mips32r2: MT7621 支持 MIPS32 Release 2 指令集，开启后效率更高
+          # -mtune=mips32r2: 专门针对此架构微调
+          # -fomit-frame-pointer: 释放寄存器用于通用用途，略微提升性能
+          # -static: 静态链接，确保兼容性（虽然增加体积，但避免动态库加载开销）
+          
+          make -f Makefile.Linux \
+          CC=mipsel-linux-gnu-gcc \
+          LN="mipsel-linux-gnu-gcc -static" \
+          CFLAGS="-g0 -O2 -mips32r2 -mtune=mips32r2 -fomit-frame-pointer -fno-strict-aliasing -c -pthread -D_THREAD_SAFE -D_REENTRANT -DNOODBC -DWITH_STD_MALLOC -D_GNU_SOURCE" \
+          LDFLAGS="-static -s"
+
+      - name: Check Binary Info
+        run: |
+          # 验证文件架构
+          file src/3proxy
+          # 打印文件大小（虽然没压缩，但 C 语言写的一般也就 1MB 左右）
+          du -h src/3proxy
+
+      - name: Rename Output
+        run: |
+          mv src/3proxy 3proxy_mt7621_perf
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3proxy-mt7621-perf
+          path: 3proxy_mt7621_perf
