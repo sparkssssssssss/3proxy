@@ -23,11 +23,12 @@ jobs:
 
     - name: Compile 3proxy (Main Binary Only)
       run: |
-        ln -s Makefile.Linux Makefile
+        # 1. 手动生成 src 目录下所需的 Makefile.var
+        # 这是之前报错缺失文件步骤的补救措施
+        cp Makefile.Linux src/Makefile.var
         
-        # 关键修改：
-        # 1. 使用 make -C src 只编译源代码目录，跳过 plugins 目录
-        # 2. 保持 -static 以确保在路由器上能运行
+        # 2. 仅编译 src 目录 (跳过 plugins 防止动态链接错误)
+        # 注意：这里继续强制使用 -static 静态编译
         make -C src \
              CC=mipsel-linux-gnu-gcc \
              LD=mipsel-linux-gnu-gcc \
@@ -36,7 +37,7 @@ jobs:
 
     - name: Check binary architecture
       run: |
-        # 验证文件
+        # 验证文件架构是否为 MIPS
         ls -l src/
         file src/3proxy
 
