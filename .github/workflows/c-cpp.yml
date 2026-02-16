@@ -21,14 +21,20 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y gcc-mipsel-linux-gnu build-essential
 
-    - name: Compile 3proxy (Main Binary Only)
+    - name: Compile 3proxy (Force Static & No Plugins)
       run: |
-        # 1. 手动生成 src 目录下所需的 Makefile.var
-        # 这是之前报错缺失文件步骤的补救措施
+        # 1. 修复 "Makefile.var: No such file" 错误
+        # 官方脚本本该做这一步，我们手动帮它做
         cp Makefile.Linux src/Makefile.var
-        
-        # 2. 仅编译 src 目录 (跳过 plugins 防止动态链接错误)
-        # 注意：这里继续强制使用 -static 静态编译
+
+        # 2. 【核心修复】修改 src/Makefile，暴力移除插件编译
+        # 使用 sed 删除 'plugins' 依赖，确保编译器根本不看 plugins 目录
+        # 这样就能完美避开 relocation R_MIPS_HI16 错误
+        sed -i 's/ plugins//g' src/Makefile
+        sed -i 's/^SUBDIRS = plugins/SUBDIRS =/g' src/Makefile
+
+        # 3. 开始编译
+        # 只编译 src 目录
         make -C src \
              CC=mipsel-linux-gnu-gcc \
              LD=mipsel-linux-gnu-gcc \
@@ -37,8 +43,9 @@ jobs:
 
     - name: Check binary architecture
       run: |
-        # 验证文件架构是否为 MIPS
-        ls -l src/
+        # 确认编译结果
+        ls -lh src/3proxy
+        # 确认它是 MIPS 架构且是静态链接 (statically linked)
         file src/3proxy
 
     - name: Upload Artifact
