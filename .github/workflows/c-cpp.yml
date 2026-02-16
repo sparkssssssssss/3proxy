@@ -1,7 +1,7 @@
 name: Build 3proxy for MT7621 (MIPS)
 
 on:
-  workflow_dispatch:  # 允许手动点击按钮触发编译
+  workflow_dispatch:
   push:
     branches: [ master ]
 
@@ -13,37 +13,31 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        repository: z3APA3A/3proxy # 这里拉取官方仓库，或者改为你的仓库
-        ref: master                # 使用 master 分支
+        repository: z3APA3A/3proxy
+        ref: master
 
     - name: Install Cross-Compiler (mipsel)
       run: |
         sudo apt-get update
-        # 安装 MIPS Little Endian (mipsel) 的交叉编译器
         sudo apt-get install -y gcc-mipsel-linux-gnu build-essential
 
-    - name: Compile 3proxy
+    - name: Compile 3proxy (Main Binary Only)
       run: |
-        # 链接 Linux 配置文件
         ln -s Makefile.Linux Makefile
         
-        # 开始编译
-        # CC: 指定交叉编译器
-        # LD: 指定链接器
-        # CFLAGS 参数说明:
-        # -static: 静态链接，确保在任何固件上都能运行
-        # -O2: 优化等级
-        # -DNOODBC: 路由器通常不需要 ODBC 数据库支持，减小体积
-        # -DWITH_STD_MALLOC: 使用标准内存分配
-        # -DFD_SETSIZE=4096: 增加最大连接数限制
-        make CC=mipsel-linux-gnu-gcc \
+        # 关键修改：
+        # 1. 使用 make -C src 只编译源代码目录，跳过 plugins 目录
+        # 2. 保持 -static 以确保在路由器上能运行
+        make -C src \
+             CC=mipsel-linux-gnu-gcc \
              LD=mipsel-linux-gnu-gcc \
              CFLAGS="-g -O2 -fno-strict-aliasing -c -pthread -D_THREAD_SAFE -D_REENTRANT -DNOODBC -DWITH_STD_MALLOC -DFD_SETSIZE=4096 -DWITH_POLL -static" \
              LDFLAGS="-g -O2 -fno-strict-aliasing -pthread -static"
 
     - name: Check binary architecture
       run: |
-        # 验证编译出来的文件是否为 MIPS 格式
+        # 验证文件
+        ls -l src/
         file src/3proxy
 
     - name: Upload Artifact
