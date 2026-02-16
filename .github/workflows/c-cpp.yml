@@ -1,4 +1,4 @@
-name: Build 3proxy static lite (MT7621, no musl.cc)
+name: Build 3proxy static lite (MT7621)
 
 on:
   workflow_dispatch:
@@ -9,67 +9,100 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Install deps
         run: |
+          set -eux
           sudo apt-get update
           sudo apt-get install -y wget xz-utils git file ca-certificates
 
-      - name: Set vars
+      - name: Set build vars
         run: |
           echo "TPROXY_VER=0.9.4" >> $GITHUB_ENV
-          echo "OWRT_VER=23.05.5" >> $GITHUB_ENV
-          echo "SDK_FILE=openwrt-sdk-23.05.5-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz" >> $GITHUB_ENV
-          echo "SDK_URL_1=https://downloads.openwrt.org/releases/23.05.5/targets/ramips/mt7621/openwrt-sdk-23.05.5-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz" >> $GITHUB_ENV
-          # 你可以再加自己的备用URL（比如你自己的 GitHub Release）
-          echo "SDK_URL_2=" >> $GITHUB_ENV
+          echo "SDK_URL=https://downloads.openwrt.org/releases/23.05.5/targets/ramips/mt7621/openwrt-sdk-23.05.5-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz" >> $GITHUB_ENV
 
       - name: Download OpenWrt SDK (IPv4 + retry)
         run: |
           set -eux
-          wget -4 --tries=3 --timeout=30 -O sdk.tar.xz "$SDK_URL_1" || \
-          wget -4 --tries=3 --timeout=30 -O sdk.tar.xz "$SDK_URL_2"
+          wget -4 --tries=3 --timeout=30 -O sdk.tar.xz "$SDK_URL"
           tar -xf sdk.tar.xz
           mv openwrt-sdk-* openwrt-sdk
 
-      - name: Download 3proxy
+      - name: Download 3proxy source
         run: |
           set -eux
           git clone --depth=1 --branch "$TPROXY_VER" https://github.com/3proxy/3proxy.git 3proxy-src
 
-      - name: Build static (size-first)
+      - name: Build 3proxy (static, size-first, robust)
         working-directory: 3proxy-src
         run: |
-          set -eux
+          set -euxo pipefail
+
           TOOLCHAIN_DIR=$(echo "$GITHUB_WORKSPACE"/openwrt-sdk/staging_dir/toolchain-*)
           GCC=$(ls "$TOOLCHAIN_DIR"/bin/*-openwrt-linux-musl-gcc | head -n1)
           CROSS_PREFIX="${GCC%gcc}"
 
+          export STAGING_DIR="$TOOLCHAIN_DIR"
           export CC="${CROSS_PREFIX}gcc"
           export AR="${CROSS_PREFIX}ar"
           export RANLIB="${CROSS_PREFIX}ranlib"
           export STRIP="${CROSS_PREFIX}strip"
 
           make -f Makefile.Linux clean || true
-          make -f Makefile.Linux \
+
+          # 方案A：不覆盖Makefile内置CFLAGS（避免丢掉 -c）
+          if make -f Makefile.Linux \
             CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
-            CFLAGS="-Os -static -fno-stack-protector -U_FORTIFY_SOURCE -ffunction-sections -fdata-sections" \
-            LDFLAGS="-static -Wl,--gc-sections"
+            EXTRA_CFLAGS="-Os -fdata-sections -ffunction-sections -fno-stack-protector -U_FORTIFY_SOURCE" \
+            EXTRA_LDFLAGS="-static -Wl,--gc-sections"; then
+            echo "Build with EXTRA_* succeeded"
+          else
+            echo "Build with EXTRA_* failed, retry with explicit CFLAGS/LDFLAGS..."
+            make -f Makefile.Linux clean || true
+            # 方案B兜底：显式保留 -c，防止出现 undefined reference
+            make -f Makefile.Linux \
+              CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
+              CFLAGS="-c -Os -fdata-sections -ffunction-sections -fno-stack-protector -U_FORTIFY_SOURCE" \
+              LDFLAGS="-static -Wl,--gc-sections"
+          fi
 
           test -f bin/3proxy
-          $STRIP --strip-all bin/3proxy
+          "$STRIP" --strip-all bin/3proxy
           file bin/3proxy
 
-      - name: Pack
+      - name: Create minimal runtime files (socks5 only)
         run: |
+          set -eux
           mkdir -p out
-          cp 3proxy-src/bin/3proxy out/3proxy-mt7621-static-lite
-          tar -C out -czf 3proxy-mt7621-static-lite.tar.gz 3proxy-mt7621-static-lite
 
-      - uses: actions/upload-artifact@v4
+          cp 3proxy-src/bin/3proxy out/3proxy
+
+          cat > out/3proxy.cfg << 'EOF'
+nscache 65536
+timeouts 1 5 30 60 180 1800 15 60
+auth none
+allow *
+socks -p1080
+EOF
+
+          cat > out/run.sh << 'EOF'
+#!/bin/sh
+set -e
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+exec "$DIR/3proxy" "$DIR/3proxy.cfg"
+EOF
+          chmod +x out/run.sh
+
+          tar -C out -czf 3proxy-mt7621-static-lite.tar.gz 3proxy 3proxy.cfg run.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
           name: 3proxy-mt7621-static-lite
           path: |
-            out/3proxy-mt7621-static-lite
+            out/3proxy
+            out/3proxy.cfg
+            out/run.sh
             3proxy-mt7621-static-lite.tar.gz
