@@ -18,12 +18,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y wget xz-utils git file ca-certificates
 
-      - name: Set build vars
+      - name: Set vars
         run: |
-          echo "TPROXY_VER=0.9.4" >> $GITHUB_ENV
-          echo "SDK_URL=https://downloads.openwrt.org/releases/23.05.5/targets/ramips/mt7621/openwrt-sdk-23.05.5-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz" >> $GITHUB_ENV
+          echo "TPROXY_VER=0.9.4" >> "$GITHUB_ENV"
+          echo "SDK_URL=https://downloads.openwrt.org/releases/23.05.5/targets/ramips/mt7621/openwrt-sdk-23.05.5-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz" >> "$GITHUB_ENV"
 
-      - name: Download OpenWrt SDK (IPv4 + retry)
+      - name: Download OpenWrt SDK
         run: |
           set -eux
           wget -4 --tries=3 --timeout=30 -O sdk.tar.xz "$SDK_URL"
@@ -35,11 +35,10 @@ jobs:
           set -eux
           git clone --depth=1 --branch "$TPROXY_VER" https://github.com/3proxy/3proxy.git 3proxy-src
 
-      - name: Build 3proxy (static, size-first, robust)
+      - name: Build 3proxy
         working-directory: 3proxy-src
         run: |
-          set -euxo pipefail
-
+          set -eux
           TOOLCHAIN_DIR=$(echo "$GITHUB_WORKSPACE"/openwrt-sdk/staging_dir/toolchain-*)
           GCC=$(ls "$TOOLCHAIN_DIR"/bin/*-openwrt-linux-musl-gcc | head -n1)
           CROSS_PREFIX="${GCC%gcc}"
@@ -51,32 +50,22 @@ jobs:
           export STRIP="${CROSS_PREFIX}strip"
 
           make -f Makefile.Linux clean || true
-
-          # 方案A：不覆盖Makefile内置CFLAGS（避免丢掉 -c）
-          if make -f Makefile.Linux \
-            CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
-            EXTRA_CFLAGS="-Os -fdata-sections -ffunction-sections -fno-stack-protector -U_FORTIFY_SOURCE" \
-            EXTRA_LDFLAGS="-static -Wl,--gc-sections"; then
-            echo "Build with EXTRA_* succeeded"
-          else
-            echo "Build with EXTRA_* failed, retry with explicit CFLAGS/LDFLAGS..."
-            make -f Makefile.Linux clean || true
-            # 方案B兜底：显式保留 -c，防止出现 undefined reference
-            make -f Makefile.Linux \
-              CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
-              CFLAGS="-c -Os -fdata-sections -ffunction-sections -fno-stack-protector -U_FORTIFY_SOURCE" \
-              LDFLAGS="-static -Wl,--gc-sections"
-          fi
+          make -f Makefile.Linux \
+            CC="$CC" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            STRIP="$STRIP" \
+            CFLAGS="-c -Os -fdata-sections -ffunction-sections -fno-stack-protector -U_FORTIFY_SOURCE" \
+            LDFLAGS="-static -Wl,--gc-sections"
 
           test -f bin/3proxy
           "$STRIP" --strip-all bin/3proxy
           file bin/3proxy
 
-      - name: Create minimal runtime files (socks5 only)
+      - name: Package
         run: |
           set -eux
           mkdir -p out
-
           cp 3proxy-src/bin/3proxy out/3proxy
 
           cat > out/3proxy.cfg << 'EOF'
