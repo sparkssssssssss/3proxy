@@ -1,4 +1,4 @@
-name: Build 3proxy static lite (MT7621)
+name: Build 3proxy static lite (MT7621, no musl.cc)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - uses: actions/checkout@v4
@@ -14,22 +14,26 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget xz-utils git file
+          sudo apt-get install -y wget xz-utils git file ca-certificates
 
-      - name: Set vars (pin stable versions)
+      - name: Set vars
         run: |
           echo "TPROXY_VER=0.9.4" >> $GITHUB_ENV
-          echo "TC_URL_1=https://more.musl.cc/11.2.1/x86_64-linux-musl/mipsel-linux-musl-cross.tgz" >> $GITHUB_ENV
-          echo "TC_URL_2=https://musl.cc/mipsel-linux-musl-cross.tgz" >> $GITHUB_ENV
+          echo "OWRT_VER=23.05.5" >> $GITHUB_ENV
+          echo "SDK_FILE=openwrt-sdk-23.05.5-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz" >> $GITHUB_ENV
+          echo "SDK_URL_1=https://downloads.openwrt.org/releases/23.05.5/targets/ramips/mt7621/openwrt-sdk-23.05.5-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz" >> $GITHUB_ENV
+          # 你可以再加自己的备用URL（比如你自己的 GitHub Release）
+          echo "SDK_URL_2=" >> $GITHUB_ENV
 
-      - name: Download toolchain (with fallback)
+      - name: Download OpenWrt SDK (IPv4 + retry)
         run: |
           set -eux
-          wget -O tc.tgz "$TC_URL_1" || wget -O tc.tgz "$TC_URL_2"
-          tar -xzf tc.tgz
-          mv mipsel-linux-musl-cross toolchain
+          wget -4 --tries=3 --timeout=30 -O sdk.tar.xz "$SDK_URL_1" || \
+          wget -4 --tries=3 --timeout=30 -O sdk.tar.xz "$SDK_URL_2"
+          tar -xf sdk.tar.xz
+          mv openwrt-sdk-* openwrt-sdk
 
-      - name: Download 3proxy source
+      - name: Download 3proxy
         run: |
           set -eux
           git clone --depth=1 --branch "$TPROXY_VER" https://github.com/3proxy/3proxy.git 3proxy-src
@@ -38,17 +42,20 @@ jobs:
         working-directory: 3proxy-src
         run: |
           set -eux
-          export PATH="$GITHUB_WORKSPACE/toolchain/bin:$PATH"
-          export CC=mipsel-linux-musl-gcc
-          export AR=mipsel-linux-musl-ar
-          export RANLIB=mipsel-linux-musl-ranlib
-          export STRIP=mipsel-linux-musl-strip
+          TOOLCHAIN_DIR=$(echo "$GITHUB_WORKSPACE"/openwrt-sdk/staging_dir/toolchain-*)
+          GCC=$(ls "$TOOLCHAIN_DIR"/bin/*-openwrt-linux-musl-gcc | head -n1)
+          CROSS_PREFIX="${GCC%gcc}"
+
+          export CC="${CROSS_PREFIX}gcc"
+          export AR="${CROSS_PREFIX}ar"
+          export RANLIB="${CROSS_PREFIX}ranlib"
+          export STRIP="${CROSS_PREFIX}strip"
 
           make -f Makefile.Linux clean || true
           make -f Makefile.Linux \
             CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
-            CFLAGS="-Os -fdata-sections -ffunction-sections -static" \
-            LDFLAGS="-static -Wl,--gc-sections -s"
+            CFLAGS="-Os -static -fno-stack-protector -U_FORTIFY_SOURCE -ffunction-sections -fdata-sections" \
+            LDFLAGS="-static -Wl,--gc-sections"
 
           test -f bin/3proxy
           $STRIP --strip-all bin/3proxy
