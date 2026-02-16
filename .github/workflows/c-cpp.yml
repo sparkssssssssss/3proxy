@@ -1,58 +1,68 @@
-name: Build 3proxy for MT7621 (MIPS)
+name: Build 3proxy static lite (MT7621)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ master ]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        repository: z3APA3A/3proxy
-        ref: master
+      - uses: actions/checkout@v4
 
-    - name: Install Cross-Compiler (mipsel)
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-mipsel-linux-gnu build-essential
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget xz-utils git file
 
-    - name: Compile 3proxy (Nuclear Option)
-      run: |
-        # 1. 初始化变量文件 (必须步骤)
-        cp Makefile.Linux src/Makefile.var
+      - name: Set vars (pin stable versions)
+        run: |
+          echo "TPROXY_VER=0.9.4" >> $GITHUB_ENV
+          echo "TC_URL_1=https://more.musl.cc/11.2.1/x86_64-linux-musl/mipsel-linux-musl-cross.tgz" >> $GITHUB_ENV
+          echo "TC_URL_2=https://musl.cc/mipsel-linux-musl-cross.tgz" >> $GITHUB_ENV
 
-        # 2. 【核弹级修复】
-        # 直接删除 src/Makefile 中所有以 SUBDIRS 开头的行
-        # 无论它是 "SUBDIRS = plugins" 还是 "SUBDIRS=plugins" (带tab或空格)，统统删掉
-        sed -i '/^SUBDIRS/d' src/Makefile
+      - name: Download toolchain (with fallback)
+        run: |
+          set -eux
+          wget -O tc.tgz "$TC_URL_1" || wget -O tc.tgz "$TC_URL_2"
+          tar -xzf tc.tgz
+          mv mipsel-linux-musl-cross toolchain
 
-        # 3. 编译
-        # -C src: 进入 src 目录
-        # SUBDIRS="": 再次强制置空子目录变量，双重保险
-        # 3proxy: 显式告诉 make 只编译 "3proxy" 这个二进制文件，不要编译 "all"
-        make -C src 3proxy \
-             SUBDIRS="" \
-             CC=mipsel-linux-gnu-gcc \
-             LD=mipsel-linux-gnu-gcc \
-             CFLAGS="-g -O2 -fno-strict-aliasing -c -pthread -D_THREAD_SAFE -D_REENTRANT -DNOODBC -DWITH_STD_MALLOC -DFD_SETSIZE=4096 -DWITH_POLL -static" \
-             LDFLAGS="-g -O2 -fno-strict-aliasing -pthread -static"
+      - name: Download 3proxy source
+        run: |
+          set -eux
+          git clone --depth=1 --branch "$TPROXY_VER" https://github.com/3proxy/3proxy.git 3proxy-src
 
-    - name: Check binary architecture
-      run: |
-        # 检查是否成功生成
-        ls -lh src/3proxy
-        # 验证架构和静态链接属性
-        file src/3proxy
+      - name: Build static (size-first)
+        working-directory: 3proxy-src
+        run: |
+          set -eux
+          export PATH="$GITHUB_WORKSPACE/toolchain/bin:$PATH"
+          export CC=mipsel-linux-musl-gcc
+          export AR=mipsel-linux-musl-ar
+          export RANLIB=mipsel-linux-musl-ranlib
+          export STRIP=mipsel-linux-musl-strip
 
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: 3proxy-mt7621-mipsel-static
-        path: |
-          src/3proxy
-          scripts/3proxy.cfg
+          make -f Makefile.Linux clean || true
+          make -f Makefile.Linux \
+            CC="$CC" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
+            CFLAGS="-Os -fdata-sections -ffunction-sections -static" \
+            LDFLAGS="-static -Wl,--gc-sections -s"
+
+          test -f bin/3proxy
+          $STRIP --strip-all bin/3proxy
+          file bin/3proxy
+
+      - name: Pack
+        run: |
+          mkdir -p out
+          cp 3proxy-src/bin/3proxy out/3proxy-mt7621-static-lite
+          tar -C out -czf 3proxy-mt7621-static-lite.tar.gz 3proxy-mt7621-static-lite
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 3proxy-mt7621-static-lite
+          path: |
+            out/3proxy-mt7621-static-lite
+            3proxy-mt7621-static-lite.tar.gz
