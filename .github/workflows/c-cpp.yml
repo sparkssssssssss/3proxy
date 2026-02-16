@@ -21,21 +21,22 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y gcc-mipsel-linux-gnu build-essential
 
-    - name: Compile 3proxy (Force Static & No Plugins)
+    - name: Compile 3proxy (Nuclear Option)
       run: |
-        # 1. 修复 "Makefile.var: No such file" 错误
-        # 官方脚本本该做这一步，我们手动帮它做
+        # 1. 初始化变量文件 (必须步骤)
         cp Makefile.Linux src/Makefile.var
 
-        # 2. 【核心修复】修改 src/Makefile，暴力移除插件编译
-        # 使用 sed 删除 'plugins' 依赖，确保编译器根本不看 plugins 目录
-        # 这样就能完美避开 relocation R_MIPS_HI16 错误
-        sed -i 's/ plugins//g' src/Makefile
-        sed -i 's/^SUBDIRS = plugins/SUBDIRS =/g' src/Makefile
+        # 2. 【核弹级修复】
+        # 直接删除 src/Makefile 中所有以 SUBDIRS 开头的行
+        # 无论它是 "SUBDIRS = plugins" 还是 "SUBDIRS=plugins" (带tab或空格)，统统删掉
+        sed -i '/^SUBDIRS/d' src/Makefile
 
-        # 3. 开始编译
-        # 只编译 src 目录
-        make -C src \
+        # 3. 编译
+        # -C src: 进入 src 目录
+        # SUBDIRS="": 再次强制置空子目录变量，双重保险
+        # 3proxy: 显式告诉 make 只编译 "3proxy" 这个二进制文件，不要编译 "all"
+        make -C src 3proxy \
+             SUBDIRS="" \
              CC=mipsel-linux-gnu-gcc \
              LD=mipsel-linux-gnu-gcc \
              CFLAGS="-g -O2 -fno-strict-aliasing -c -pthread -D_THREAD_SAFE -D_REENTRANT -DNOODBC -DWITH_STD_MALLOC -DFD_SETSIZE=4096 -DWITH_POLL -static" \
@@ -43,9 +44,9 @@ jobs:
 
     - name: Check binary architecture
       run: |
-        # 确认编译结果
+        # 检查是否成功生成
         ls -lh src/3proxy
-        # 确认它是 MIPS 架构且是静态链接 (statically linked)
+        # 验证架构和静态链接属性
         file src/3proxy
 
     - name: Upload Artifact
